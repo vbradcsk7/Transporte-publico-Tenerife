@@ -1,176 +1,270 @@
-# Tenerife Transit Graph (TITSA Network Analysis & Multimodal Routing)
+Tenerife Transit Graph (TITSA Network Analysis & Multimodal Routing)
 
-Modelado de la red de transporte público regular de la isla de Tenerife (TITSA) como un multigrafo dirigido ponderado (MultiDiGraph), con algoritmo de enrutamiento multimodal en espacio de estados (*state-space Dijkstra*), cálculo de métricas de Network Science (centralidad e intermediación, detección de comunidades con Louvain) y simulación de resiliencia ante contingencias y cierres de corredores.
+Modeling Tenerife Island's public transportation network (TITSA) as a weighted directed multigraph (MultiDiGraph), featuring a state-space Dijkstra multimodal routing algorithm, Network Science metrics computation (centrality and betweenness, Louvain community detection), and resilience simulations under contingency scenarios and corridor closures.
 
-![Vista previa del mapa topológico insular y planificador de rutas](assets/preview.jpg)
+!Preview of the island's topological map and route planner
 
----
+System Architecture
+[lineas-y-horarios.csv (181 TITSA routes)]
+        │
+        ▼ (Phase 1: Ingestion & NLP / Asynchronous Scraping)
+[Stops, Routes and Frequency Parser]
+        │
+        ▼ (Phase 2: Graph Modeling)
+[NetworkX MultiDiGraph]
+   ├── Nodes: Transport hubs, municipalities and key stops (WGS84 coordinates)
+   └── Edges: Directed routes with attributes (route_id, estimated_time, frequency, transfer_penalty)
+        │
+        ├──► [Network Science Module]: Betweenness Centrality, Louvain Communities, Resilience
+        └──► [FastAPI REST API]: Route Search (State-Space Dijkstra), Disruption Simulation, GeoJSON/GraphML Export
 
-## Arquitectura del Sistema
+Repository Structure
+tenerife-transit-graph/
+├── assets/
+│   └── preview.jpg              # Repository preview screenshot
+├── docker-compose.yml           # FastAPI + Redis (route caching)
+├── Dockerfile                   # Production-ready container image
+├── setup.py                     # Standard installation configuration
+├── requirements.txt             # Environment dependencies
+├── pyproject.toml               # Project metadata
+├── README.md                    # Documentation, findings and benchmarks
+├── transit_gui.html             # Standalone interactive GUI
+├── cli.py                       # CLI for direct terminal queries
+├── data/
+│   ├── raw/
+│   │   └── lineas-y-horarios.csv
+│   └── processed/
+│       └── graph_snapshot.json  # Serialized graph ready to load in <10ms
+├── src/
+│   ├── etl/
+│   │   ├── parser.py            # Data normalization and entity resolution
+│   │   └── scraper.py           # Asynchronous frequency and departure extractor
+│   ├── graph/
+│   │   ├── builder.py           # MultiDiGraph construction with distances and travel times
+│   │   ├── routing.py           # State-aware Dijkstra (no artificial transfer penalties)
+│   │   └── analytics.py         # Centrality, communities and failure simulation
+│   └── api/
+│       ├── main.py              # FastAPI application with GUI and hybrid caching
+│       └── schemas.py           # Pydantic v2 schemas
+├── notebooks/
+│   └── network_analysis.ipynb   # Hub visualization and resilience curves
+└── tests/
+    ├── test_routing.py          # Validation of direct routes, transfers and transport modes
+    └── test_resilience.py       # Validation of disconnection impact and centrality
 
-    [lineas-y-horarios.csv (181 líneas TITSA)]
-            │
-            ▼ (Fase 1: Ingesta & NLP / Scraping asíncrono)
-    [Parser de Paradas, Trayectos y Frecuencias]
-            │
-            ▼ (Fase 2: Modelado de Grafo)
-    [MultiDiGraph en NetworkX]
-       ├── Nodos: Intercambiadores, municipios y paradas clave (coordenadas WGS84)
-       └── Aristas: Líneas dirigidas con atributos (linea_id, tiempo_est, frecuencia, penalización_transbordo)
-            │
-            ├──► [Módulo Network Science]: Betweenness Centrality, Comunidades Louvain, Resiliencia
-            └──► [API REST FastAPI]: Búsqueda de rutas (Dijkstra en espacio de estados), Simulación de cortes, Exportación GeoJSON/GraphML
+Mathematical and Algorithmic Modeling
+1. Dynamic Edge Cost and Waiting Time
 
----
+For a route 
+𝑙
+ with service frequency 
+𝑓
+𝑙
+ (buses per hour), the average initial waiting time or transfer waiting time is:
 
-## Estructura del Repositorio
+𝑊
+wait
+(
+𝑙
+)
+=
+60
+2
+𝑓
+𝑙
 
-    tenerife-transit-graph/
-    ├── assets/
-    │   └── preview.jpg              # Captura de vista previa para el repositorio
-    ├── docker-compose.yml           # API FastAPI + Redis (caché de rutas)
-    ├── Dockerfile                   # Imagen lista para producción
-    ├── setup.py                     # Configuración de instalación estándar
-    ├── requirements.txt             # Dependencias del entorno
-    ├── pyproject.toml               # Metadatos del proyecto
-    ├── README.md                    # Documentación, hallazgos y benchmarks
-    ├── transit_gui.html             # GUI interactiva autónoma
-    ├── cli.py                       # CLI para consultas directas en terminal
-    ├── data/
-    │   ├── raw/
-    │   │   └── lineas-y-horarios.csv
-    │   └── processed/
-    │       └── graph_snapshot.json  # Grafo serializado listo para levantar en <10ms
-    ├── src/
-    │   ├── etl/
-    │   │   ├── parser.py            # Normalización y resolución de entidades
-    │   │   └── scraper.py           # Extractor asíncrono de frecuencias y salidas
-    │   ├── graph/
-    │   │   ├── builder.py           # Construcción de MultiDiGraph con distancias y tiempos
-    │   │   ├── routing.py           # Dijkstra con estado (sin trampas de transbordo)
-    │   │   └── analytics.py         # Centralidad, comunidades y simulación de fallos
-    │   └── api/
-    │       ├── main.py              # Aplicación FastAPI con GUI y caché híbrido
-    │       └── schemas.py           # Esquemas Pydantic v2
-    ├── notebooks/
-    │   └── network_analysis.ipynb   # Visualización de hubs y curvas de resiliencia
-    └── tests/
-        ├── test_routing.py          # Validación de rutas directas, transbordos y modos
-        └── test_resilience.py       # Validación de impacto de desconexión y centralidad
+The total cost of traversing the segment 
+(
+𝑢
+,
+𝑣
+)
+ on route 
+𝑙
+, after previously traveling on route 
+𝑙
+prev
+, is:
 
----
+𝑊
+(
+𝑢
+,
+𝑣
+,
+𝑙
+)
+=
+𝑇
+travel
+(
+𝑢
+,
+𝑣
+)
++
+𝛿
+(
+𝑙
+,
+𝑙
+prev
+)
+⋅
+(
+𝑊
+wait
+(
+𝑙
+)
++
+𝑃
+transfer
+)
 
-## Modelado Matemático y Algorítmico
+Where:
 
-### 1. Costo Dinámico de Aristas y Espera
-Para una línea $l$ con frecuencia de paso $f_l$ (guaguas por hora), el tiempo medio de espera inicial o en transbordo es:
+𝛿
+(
+𝑙
+,
+𝑙
+prev
+)
+=
+0
+ if the passenger stays on the same vehicle (
+𝑙
+=
+𝑙
+prev
+).
+𝛿
+(
+𝑙
+,
+𝑙
+prev
+)
+=
+1
+ if the passenger makes a transfer or boards for the first time (
+𝑙
+≠
+𝑙
+prev
+).
+In fastest mode: 
+𝑃
+transfer
+=
+5.0
+ min
+ (standard walking time within a transport hub).
+In min_transfers mode: 
+𝑃
+transfer
+=
+60.0
+ min
+ (virtual penalty to prioritize direct routes).
+2. State-Space Dijkstra
 
-$$W_{\text{wait}}(l) = \frac{60}{2 f_l}$$
+A shortest-path algorithm operating on a standard graph cannot distinguish whether two consecutive edges belong to the same bus route or require the passenger to get off and transfer.
 
-El coste total de recorrer el segmento $(u, v)$ en la línea $l$ tras viajar en la línea $l_{\text{prev}}$ es:
+To solve this, the priority queue manages states of the following form:
 
-$$W(u, v, l) = T_{\text{viaje}}(u, v) + \delta(l, l_{\text{prev}}) \cdot \left( W_{\text{wait}}(l) + P_{\text{transbordo}} \right)$$
+State
+=
+(
+cumulative_cost
+,
+current_node
+,
+current_route
+)
 
-Donde:
-* $\delta(l, l_{\text{prev}}) = 0$ si el usuario continúa en el mismo vehículo ($l = l_{\text{prev}}$).
-* $\delta(l, l_{\text{prev}}) = 1$ si el usuario realiza un transbordo o aborda por primera vez ($l \neq l_{\text{prev}}$).
-* En modo fastest: $P_{\text{transbordo}} = 5.0\text{ min}$ (caminata estándar en intercambiador).
-* En modo min_transfers: $P_{\text{transbordo}} = 60.0\text{ min}$ (penalización virtual para priorizar líneas directas).
+This ensures that when consecutive edges belong to the same route (e.g., route 015 or 110), only the actual travel time is accumulated, without introducing artificial transfer penalties.
 
-### 2. Dijkstra en Espacio de Estados
-Un algoritmo de caminos mínimos sobre un grafo simple no puede distinguir si dos aristas consecutivas pertenecen a la misma línea o requieren bajarse de la guagua. Para resolver esto, la cola de prioridad gestiona estados de la forma:
+Network Science Findings
+Hub Ranking by Betweenness Centrality (
+𝐶
+𝐵
+)
 
-$$\text{Estado} = \left( \text{costo\_acumulado}, \text{nodo\_actual}, \text{linea\_actual} \right)$$
+Betweenness centrality measures the proportion of shortest paths that pass through each node:
 
-Esto garantiza que al enlazar aristas sucesivas de la misma línea (ejemplo: línea 015 o 110) solo se acumule el tiempo de rodaje sin penalizaciones artificiales.
+Rank	Canonical Node	Municipality	
+𝐶
+𝐵
+	Weighted Degree (departures/hour)
+1	Santa Cruz Interchange	Santa Cruz de Tenerife	0.5098	185.0
+2	La Laguna Interchange	San Cristóbal de La Laguna	0.2602	142.5
+3	Icod de los Vinos	Icod de los Vinos	0.1381	38.0
+4	Los Cristianos	Arona	0.1369	56.0
+5	Güímar	Güímar	0.1181	42.5
+6	San Isidro	Granadilla de Abona	0.0894	51.0
+7	Costa Adeje Station	Adeje	0.0812	64.0
+8	Puerto de la Cruz	Puerto de la Cruz	0.0765	58.0
 
----
+Topological conclusion: The island's transportation network exhibits a highly monocentric structure within the Metropolitan Area, with Santa Cruz accounting for more than 50% of global betweenness centrality. This structure is complemented by essential secondary regional distribution hubs (Icod in the Northwest, and Los Cristianos/San Isidro in the South).
 
-## Hallazgos de Network Science
+Community Detection (Louvain)
 
-### Ranking de Hubs por Centralidad de Intermediación ($C_B$)
+The algorithm naturally groups nodes into functional mobility zones:
 
-La centralidad de intermediación mide la proporción de caminos mínimos que atraviesan cada nodo:
+Central Metropolitan Community: Santa Cruz, La Laguna, La Cuesta, Taco, Finca España, University Hospital, Añaza.
+Southern Tourist Community: Costa Adeje, Los Cristianos, Las Galletas, Costa del Silencio, Las Chafiras, Tenerife South Airport (TFS).
+Northwestern Region / Isla Baja Community: Icod de los Vinos, San Juan de la Rambla, Buenavista del Norte, Los Gigantes, Puerto de Erjos.
+La Orotava Valley Community: La Orotava, Puerto de la Cruz, Los Realejos, Aguamansa.
+Güímar Valley and Southeastern Community: Güímar, Candelaria, Arafo, Fasnia, Arico.
+Anaga Massif Community: San Andrés, Taganana, Almáciga, Chamorga, Cruz del Carmen, Afur.
+Resilience Curves and Vulnerability Under Disruption Scenarios
+Disruption Scenario	Disconnected Pairs	Average Travel Time Increase (
+Δ
+𝑇
+%
+)	Isolated Nodes
+Route 015 disruption (Direct Santa Cruz – La Laguna connection)	0.0%	+0.85%	0
+TF-5 Main Corridor disruption (L015 + L100 + L102)	0.0%	+3.42%	0
+TF-1 Main Corridor disruption (L010 + L110 + L111)	0.0%	+4.15%	0
+Santa Cruz Interchange closure	18.7%	+24.6%	8
+REST API Endpoints (FastAPI)
+Method	Endpoint	Parameters	Description
+GET	/	None	Service status or interactive web interface.
+GET	/app	None	Full interactive network GUI.
+GET	/api/v1/nodes	is_hub, municipality	List of normalized nodes and connectivity degree.
+GET	/api/v1/routes	origin, destination, mode	Multimodal itinerary including transfers, waiting times and routes.
+GET	/api/v1/analytics/centrality	limit	Centrality ranking (Betweenness, Closeness, PageRank).
+GET	/api/v1/analytics/communities	None	Functional zones detected using Louvain.
+POST	/api/v1/analytics/simulate-outage	{"disabled_lines": [...], "closed_nodes": [...]}	Disruption simulation and calculation of travel time increase (delta T%) and network disconnection.
+GET	/api/v1/graph/export	format (geojson | graphml)	Spatial or topological graph export for external visualization.
+Performance Benchmarks
+Cold graph loading from JSON snapshot: ~3.2 ms (target: < 100 ms).
+Point-to-point route calculation (State-Space Dijkstra): ~1.5–4.8 ms.
+Route caching (Redis / in-memory): < 0.3 ms.
+Full centrality computation across 100 nodes: ~18 ms.
+Setup and Execution Guide
+1. Unit Testing
 
-| Posición | Nodo Canónico | Municipio | $C_B$ | Grado Ponderado (salidas/h) |
-|---|---|---|---|---|
-| 1 | **Intercambiador Santa Cruz** | Santa Cruz de Tenerife | **0.5098** | 185.0 |
-| 2 | **Intercambiador La Laguna** | San Cristóbal de La Laguna | **0.2602** | 142.5 |
-| 3 | **Icod de los Vinos** | Icod de los Vinos | **0.1381** | 38.0 |
-| 4 | **Los Cristianos** | Arona | **0.1369** | 56.0 |
-| 5 | **Güímar** | Güímar | **0.1181** | 42.5 |
-| 6 | **San Isidro** | Granadilla de Abona | **0.0894** | 51.0 |
-| 7 | **Estación Costa Adeje** | Adeje | **0.0812** | 64.0 |
-| 8 | **Puerto de la Cruz** | Puerto de la Cruz | **0.0765** | 58.0 |
+Run the test suite:
 
-**Conclusión topológica:** La red insular presenta una estructura altamente monocéntrica en el Área Metropolitana (Santa Cruz concentra más del 50% de la intermediación global), complementada por nodos de distribución comarcal secundarios indispensables (Icod en el Noroeste, Los Cristianos/San Isidro en el Sur).
+python3 tests/test_routing.py
+python3 tests/test_resilience.py
 
-### Detección de Comunidades (Louvain)
-El algoritmo agrupa de forma natural los nodos en zonas funcionales de movilidad:
-1. **Comunidad Metropolitana Central:** Santa Cruz, La Laguna, La Cuesta, Taco, Finca España, Hospital Universitario, Añaza.
-2. **Comunidad Sur Turístico:** Costa Adeje, Los Cristianos, Las Galletas, Costa del Silencio, Las Chafiras, Aeropuerto Sur TFS.
-3. **Comunidad Comarca Noroeste / Isla Baja:** Icod de los Vinos, San Juan de la Rambla, Buenavista del Norte, Los Gigantes, Puerto de Erjos.
-4. **Comunidad Valle de La Orotava:** La Orotava, Puerto de la Cruz, Los Realejos, Aguamansa.
-5. **Comunidad Valle de Güímar y Sureste:** Güímar, Candelaria, Arafo, Fasnia, Arico.
-6. **Comunidad Macizo de Anaga:** San Andrés, Taganana, Almáciga, Chamorga, Cruz del Carmen, Afur.
 
-### Curvas de Resiliencia y Vulnerabilidad ante Disrupciones
+Or use pytest (if installed):
 
-| Escenario de Disrupción | Pares Desconectados | Incremento Medio de Tiempo ($\Delta T\%$) | Nodos Aislados |
-|---|---|---|---|
-| **Línea 015 cortada** (SC - Laguna Directa) | 0.0% | +0.85% | 0 |
-| **Troncal TF-5 cortada** (L015 + L100 + L102) | 0.0% | +3.42% | 0 |
-| **Troncal TF-1 cortada** (L010 + L110 + L111) | 0.0% | +4.15% | 0 |
-| **Cierre Intercambiador Santa Cruz** | **18.7%** | **+24.6%** | 8 |
+pytest
 
----
+2. Generate the Graph Snapshot
+python3 -m src.graph.builder
 
-## Endpoints de la API REST (FastAPI)
+3. Run the API Locally
+uvicorn src.api.main:app --reload --port 8000
 
-| Método | Endpoint | Parámetros | Descripción |
-|---|---|---|---|
-| GET | / | Ninguno | Estado del servicio o interfaz web interactiva. |
-| GET | /app | Ninguno | GUI gráfica interactiva completa de la red. |
-| GET | /api/v1/nodes | is_hub, municipality | Listado de nodos normalizados y grado de conectividad. |
-| GET | /api/v1/routes | origin, destination, mode | Itinerario multimodal con transbordos, esperas y líneas. |
-| GET | /api/v1/analytics/centrality | limit | Ranking de centralidad (Betweenness, Closeness, PageRank). |
-| GET | /api/v1/analytics/communities | Ninguno | Zonas funcionales detectadas con Louvain. |
-| POST | /api/v1/analytics/simulate-outage | {"disabled_lines": [...], "closed_nodes": [...]} | Simulación de cortes y cálculo de delta T% y desconexión. |
-| GET | /api/v1/graph/export | format (geojson \| graphml) | Exportación espacial o topológica para visualización externa. |
 
----
+The interactive Swagger UI documentation will be available at http://localhost:8000/docs, and the web GUI at http://localhost:8000/app.
 
-## Benchmarks de Rendimiento
-
-* **Carga en frío del grafo desde snapshot JSON:** ~3.2 ms (objetivo < 100 ms).
-* **Cálculo de ruta punto a punto (State-Space Dijkstra):** ~1.5 - 4.8 ms.
-* **Caché de rutas (Redis / memoria):** < 0.3 ms.
-* **Cálculo completo de centralidad sobre 100 nodos:** ~18 ms.
-
----
-
-## Guía de Ejecución
-
-### 1. Pruebas Unitarias
-Ejecutar la suite de pruebas:
-
-    python3 tests/test_routing.py
-    python3 tests/test_resilience.py
-
-O usando pytest (si está instalado):
-
-    pytest
-
-### 2. Generación del Snapshot del Grafo
-
-    python3 -m src.graph.builder
-
-### 3. Levantar la API Localmente
-
-    uvicorn src.api.main:app --reload --port 8000
-
-La documentación interactiva Swagger UI estará disponible en http://localhost:8000/docs y la GUI web en http://localhost:8000/app.
-
-### 4. Despliegue con Docker y Redis
-
-    docker compose up --build -d
+4. Deploy with Docker and Redis
+docker compose up --build -d
